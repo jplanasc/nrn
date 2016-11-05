@@ -27,6 +27,7 @@ extern "C" {
 #if BLUEGENE_CHECKPOINT
 	int BGLCheckpoint();
 #endif
+    extern unsigned long long nrn_mallinfo(int);
 	extern void nrnmpi_source_var(), nrnmpi_target_var(), nrnmpi_setup_transfer();
 	extern int nrnmpi_spike_compress(int nspike, bool gid_compress, int xchng_meth);
 	extern int nrnmpi_splitcell_connect(int that_host);
@@ -72,7 +73,7 @@ extern "C" {
 	extern size_t nrnbbcore_write();
 	extern size_t nrnbbcore_register_mapping();
 	extern int nrncore_run(const char*);
-
+	extern double nrn_timeus();
 }
 
 class OcBBS : public BBS , public Resource {
@@ -640,9 +641,37 @@ static double spike_record(void* v) {
 	return 0.;
 }
 
+
+void print_mem_info() {
+/**
+ * Gather memory usage statistics for all nodes in the network, printing to the console
+ * argument 6 to nrn_mallinfo includes memory mapped files (m.hblkhd + m.arena)
+ * argument 1 to nrn_mallinfo returns uordblks which is "total size of memory occupied by chunks handed out by malloc"
+ */
+    double usageMB = (double) nrn_mallinfo(1) / (double) (1024*1024);
+    double minUsageMB = usageMB, maxUsageMB = usageMB, avgUsageMB = usageMB;
+
+#if NRNMPI
+    minUsageMB = nrnmpi_dbl_allreduce(usageMB, 3);
+    maxUsageMB = nrnmpi_dbl_allreduce(usageMB, 2);
+    avgUsageMB = nrnmpi_dbl_allreduce(usageMB, 1);
+    avgUsageMB /= nrnmpi_numprocs;
+#endif
+
+    if( nrnmpi_myid == 0 ) {
+        printf( "Memory (MBs) after psolve \tMax = %lfMB\tMin = %lfMB\tMean = %lfMB\n", maxUsageMB, minUsageMB, avgUsageMB);
+    }
+}
+
 static double psolve(void* v) {
+    double start_time = nrn_timeus();
 	OcBBS* bbs = (OcBBS*)v;
 	bbs->netpar_solve(chkarg(1, t, 1e9));
+    double stop_time = nrn_timeus();
+    if(nrnmpi_myid == 0) {
+        printf("\nSolver Time : %lf\n", stop_time - start_time);
+    }
+    print_mem_info();
 	return 0.;
 }
 
